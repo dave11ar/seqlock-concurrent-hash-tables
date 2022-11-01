@@ -30,3 +30,8 @@
 *.exe
 *.out
 *.app
+
+build/*
+.cache/*
+external/*
+perf/benchmark_custom_candidates/cuckoo/concurrent_hash_map.hpp
