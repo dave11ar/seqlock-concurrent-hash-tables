@@ -1,44 +1,23 @@
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <random>
 #include <string>
 #include <variant>
 #include <tbb/tbb.h>
-#include "benchmark_custom_candidates/stl/concurrent_stl_map_wrapper.hpp"
-#include "benchmark_custom_candidates/cuckoo/concurrent_hash_map.hpp"
+#include <benchmark/benchmark.h>
+#include <libcuckoo/cuckoohash_map.hh>
 
-class Timer {
-    tbb::tick_count tick;
-public:
-    Timer() : tick(tbb::tick_count::now()){}
-
-    double get_time() {
-        return (tbb::tick_count::now() - tick).seconds(); 
-    }
-
-    double diff_time(const Timer &newer) {
-        return (newer.tick - tick).seconds();
-    }
-
-    double mark_time() {
-        tbb::tick_count t1(tbb::tick_count::now()), t2(tick); 
-        tick = t1; 
-        return (t1 - t2).seconds(); 
-    }
-
-    double mark_time(const Timer &newer) {
-        tbb::tick_count t(tick); 
-        tick = newer.tick; 
-        return (tick - t).seconds();
-    }
-};
-
+#include "benchmark_custom_candidates/stl/concurrent_stl_hash_map.hpp"
+#include "benchmark_custom_candidates/cuckoo/concurrent_cuckoo_hash_map.hpp"
+#include "benchmark_custom_candidates/tbb_hash/concurrent_tbb_hash_map.hpp"
 
 namespace OperationsInfo {
     enum class Types {
         INSERT,
-        FIND
+        FIND,
+        ERASE
     };
 
     template<typename Key, typename Value>
@@ -55,13 +34,21 @@ namespace OperationsInfo {
         Find(const Key& key) 
             : key(key) {};
     };
+
+    template<typename Key>
+    struct Erase {
+        Key key;
+        Erase(const Key& key) 
+            : key(key) {};
+    };
 }
 
 
 template<typename Key, typename Value>
 using Operation = std::variant<
     typename OperationsInfo::Insert<Key, Value>,
-    typename OperationsInfo::Find<Key>>;
+    typename OperationsInfo::Find<Key>,
+    typename OperationsInfo::Erase<Key>>;
 
 template<typename Key, typename Value>
 using Scenario = std::vector<Operation<Key, Value>>;
@@ -84,23 +71,32 @@ public:
                 return Operation<Key, Value>(
                     std::in_place_type<OperationsInfo::Find<Key>>,
                     key_gen());
+            case OperationsInfo::Types::ERASE:
+                return Operation<Key, Value>(
+                    std::in_place_type<OperationsInfo::Erase<Key>>,
+                    key_gen());
             default:
                 assert(false);
         }
     }
 };
 
-template<typename Key, typename Value, template<typename...> class Map>
+template<typename Key, typename Value, template<typename...> typename Map>
 void do_operation(Map<Key, Value>& map, const Operation<Key, Value>& operation) {
     switch (operation.index()) {
         case 0: {
             const auto& insertInfo = std::get<OperationsInfo::Insert<Key, Value>>(operation);
-            map.insert(std::make_pair(insertInfo.key, insertInfo.value));
+            map.insert(insertInfo.key, insertInfo.value);
             break;
         }
         case 1: {
             const auto& findInfo = std::get<OperationsInfo::Find<Key>>(operation);
             map.find(findInfo.key);
+            break;
+        }
+        case 2: {
+            const auto& findInfo = std::get<OperationsInfo::Erase<Key>>(operation);
+            map.erase(findInfo.key);
             break;
         }
         default:
@@ -118,12 +114,11 @@ size_t calc_distr_count(const std::unordered_map<OperationsInfo::Types, size_t>&
 }
 
 template<typename Key, typename Value>
-Scenario<Key, Value> scenario_generator(
+Scenario<Key, Value> generate_scenario(
     const std::unordered_map<OperationsInfo::Types, size_t>& operations_distr,
     const size_t& scale,
     const OperationGenerator<Key, Value>& operation_generator) {
     Scenario<Key, Value> result;
-    //result.reserve(calc_distr_count(operations_distr));
 
     for (const auto& [operation_type, count] : operations_distr) {
         for (size_t i = 0; i < count * scale; ++i) {
@@ -134,11 +129,10 @@ Scenario<Key, Value> scenario_generator(
     return result;
 }
 
-template<typename Key, typename Value, template<typename...> class Map>
-double test(const std::vector<Scenario<Key, Value>>& scenarious) {
-    Map<Key, Value> map;
-
-    Timer timer;
+template<typename Key, typename Value, template<typename...> typename Map>
+void run_pfor_benchmark(
+    const std::vector<Scenario<Key, Value>>& scenarious,
+    Map<Key, Value>& map) {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, scenarious.size(), 1), 
         [&map, &scenarious](const auto& range) {
             for (auto it = range.begin(); it != range.end(); ++it) {
@@ -147,66 +141,175 @@ double test(const std::vector<Scenario<Key, Value>>& scenarious) {
                 }
             }
         });
-
-    return timer.get_time();
 }
 
 template<typename Key, typename Value>
-std::vector<Scenario<Key, Value>> get_shuffled_scenarious(
+std::vector<Scenario<Key, Value>> get_scenarious_from_scenario(
     size_t threads_count, 
-    const Scenario<Key, Value>& scenario) {
+    const Scenario<Key, Value>& scenario,
+    bool is_shuffled = true) {
     std::vector<Scenario<Key, Value>> scenarious(threads_count);
     for (auto& cur_scenario: scenarious) {
         cur_scenario = scenario;
-        std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
+        if (is_shuffled) {
+            std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
+        }
     }
     
     return scenarious;
 }
 
-void benchmark_0() {
-    std::mt19937 gen_32;
-    auto scenarious = get_shuffled_scenarious<int32_t, int32_t>(
+template<typename Key, typename Value>
+std::vector<Scenario<Key, Value>> split_scenario_on_scenarious(
+    size_t threads_count, 
+    const Scenario<Key, Value>& scenario,
+    bool is_shuffled = true) {
+    assert(scenario.size() % thread_count == 0);
+
+    std::vector<Scenario<Key, Value>> scenarious(threads_count);
+
+    auto it = scenario.begin();
+    for (auto& cur_scenario: scenarious) {
+        cur_scenario = std::vector(it, it + threads_count);
+        if (is_shuffled) {
+            std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
+        }
+        it += threads_count;
+    }
+    
+    return scenarious;
+}
+
+
+#define GENERATE_BENCHNARK_CODE(benchmark_name, map_name, Key, Value, Map) \
+void benchmark_name##_##map_name( \
+    benchmark::State& state, \
+    const Scenario<Key, Value>& scenario, \
+    const std::vector<std::vector<Scenario<Key, Value>>>& scenariousVector) { \
+    Map<Key, Value> map; \
+    for (const auto& operation : scenario) { \
+        do_operation(map, operation); \
+    } \
+    for (auto _ : state) { \
+        for (const auto& scenarious : scenariousVector) { \
+            run_pfor_benchmark<Key, Value, Map>(scenarious, map); \
+        } \
+    } \
+}
+
+#define GENERATE_MAP_AND_START(benchmark_name, map_name, Key, Value, Map, scenario, scenariousVector) \
+GENERATE_BENCHNARK_CODE(benchmark_name, map_name, Key, Value, Map); \
+BENCHMARK_CAPTURE(benchmark_name##_##map_name, b, scenario, scenariousVector); 
+
+#define START_BENCHMARK(benchmark_name, Key, Value, scenario, scenariousVector) \
+GENERATE_MAP_AND_START(benchmark_name, stl, Key, Value, concurrent_stl_hash_map, scenario, scenariousVector); \
+GENERATE_MAP_AND_START(benchmark_name, cuckoo, Key, Value, concurrent_cuckoo_hash_map, scenario, scenariousVector); \
+GENERATE_MAP_AND_START(benchmark_name, tbb, Key, Value, concurrent_tbb_hash_map, scenario, scenariousVector);
+
+
+START_BENCHMARK(
+    uint32_uint32_find_exists, 
+    uint32_t, 
+    uint32_t, 
+    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 1000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static uint32_t key = 0; return ++key;}, 
+            [](){return 0;})), 
+    {split_scenario_on_scenarious(
         16,
-        scenario_generator(
-            {{OperationsInfo::Types::INSERT, 1},
-          {OperationsInfo::Types::FIND,   5}},
-        10000,
-        OperationGenerator<int32_t, int32_t>(
-            [&gen_32]{return gen_32(); }, 
-            [&gen_32]{return gen_32(); })));
+        generate_scenario({{OperationsInfo::Types::FIND, 1}}, 16000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static std::mt19937 gen_32; return gen_32() % 1000000;}, 
+            [](){return 0;})))})
 
-    printf("benchmark_0:\n");
-    printf("STL map: %fs\n", test<int32_t, int32_t, CuncurrentSTLMapWrapper>(scenarious));
-    printf("TBB map: %fs\n", test<int32_t, int32_t, tbb::concurrent_unordered_map>(scenarious));
-
-    // Gets into deadlock during benchmarking
-    // printf("Cuckoo map: %f\n", test<int32_t, int32_t, std::concurrent_unordered_map>(scenarious));
-}
-
-void benchmark_1() {
-    std::mt19937 gen_32;
-    auto scenarious = get_shuffled_scenarious<int32_t, int32_t>(
+START_BENCHMARK(
+    uint32_uint32_find_exists_high_contention, 
+    uint32_t, 
+    uint32_t, 
+    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 20, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static uint32_t key = 0; return ++key;}, 
+            [](){return 0;})), 
+    {split_scenario_on_scenarious(
         16,
-        scenario_generator(
-            {{OperationsInfo::Types::INSERT, 6},
-          {OperationsInfo::Types::FIND,   0}},
-        10000,
-        OperationGenerator<int32_t, int32_t>(
-            [&gen_32]{return gen_32(); }, 
-            [&gen_32]{return gen_32(); })));
+        generate_scenario({{OperationsInfo::Types::FIND, 1}}, 16000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static std::mt19937 gen_32; return gen_32() % 20;}, 
+            [](){return 0;})))})
 
+START_BENCHMARK(
+    uint32_uint32_erase_exists, 
+    uint32_t, 
+    uint32_t, 
+    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 1000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static uint32_t key = 0; return ++key;}, 
+            [](){return 0;})), 
+    {split_scenario_on_scenarious(
+        16,
+        generate_scenario({{OperationsInfo::Types::ERASE, 1}}, 16000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static uint32_t key = 0; return ++key;}, 
+            [](){return 0;})))})
 
-    printf("benchmark_1:\n");
-    printf("STL map: %fs\n", test<int32_t, int32_t, CuncurrentSTLMapWrapper>(scenarious));
-    printf("TBB map: %fs\n", test<int32_t, int32_t, tbb::concurrent_unordered_map>(scenarious));
+  START_BENCHMARK(
+    uint32_uint32_insert_then_erase, 
+    uint32_t, 
+    uint32_t, 
+    {}, 
+    (std::vector{split_scenario_on_scenarious(
+        16,
+        generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 8000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static uint32_t key = 0; return ++key;}, 
+            [](){return 0;}))),
+      split_scenario_on_scenarious(
+        16,
+        generate_scenario({{OperationsInfo::Types::ERASE, 1}}, 8000000, 
+        OperationGenerator<uint32_t, uint32_t>(
+            [](){static uint32_t key = 0; return ++key;}, 
+            [](){return 0;})))}))
 
-    // Gets into deadlock during benchmarking
-    // printf("Cuckoo map: %f\n", test<int32_t, int32_t, std::concurrent_unordered_map>(scenarious));
-}
+    START_BENCHMARK(
+        uint32_uint32_insert_then_find, 
+        uint32_t, 
+        uint32_t, 
+        {}, 
+        (std::vector{split_scenario_on_scenarious(
+            16,
+            generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 8000000, 
+            OperationGenerator<uint32_t, uint32_t>(
+                [](){static uint32_t key = 0; return ++key;}, 
+                [](){return 0;}))),
+        split_scenario_on_scenarious(
+            16,
+            generate_scenario({{OperationsInfo::Types::FIND, 1}}, 8000000, 
+            OperationGenerator<uint32_t, uint32_t>(
+                [](){static uint32_t key = 0; return ++key;}, 
+                [](){return 0;})))}))
 
-int main() {
-    benchmark_0();
-    benchmark_1();
-    return 0;
-}
+    START_BENCHMARK(
+        uint32_uint32_insert_then_find_then_erase, 
+        uint32_t, 
+        uint32_t, 
+        {}, 
+        (std::vector{split_scenario_on_scenarious(
+            16,
+            generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 100000, 
+            OperationGenerator<uint32_t, uint32_t>(
+                [](){static uint32_t key = 0; return ++key;}, 
+                [](){return 0;}))),
+        split_scenario_on_scenarious(
+            16,
+            generate_scenario({{OperationsInfo::Types::FIND, 1}}, 10000000, 
+            OperationGenerator<uint32_t, uint32_t>(
+                [](){static uint32_t key = 0; return ++key;}, 
+                [](){return 0;}))),
+        split_scenario_on_scenarious(
+            16,
+            generate_scenario({{OperationsInfo::Types::ERASE, 1}}, 100000, 
+            OperationGenerator<uint32_t, uint32_t>(
+                [](){static uint32_t key = 0; return ++key;}, 
+                [](){return 0;})))}))
+
+BENCHMARK_MAIN();
