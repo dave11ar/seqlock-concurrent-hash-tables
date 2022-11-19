@@ -164,17 +164,16 @@ std::vector<Scenario<Key, Value>> split_scenario_on_scenarious(
     size_t threads_count, 
     const Scenario<Key, Value>& scenario,
     bool is_shuffled = true) {
-    assert(scenario.size() % thread_count == 0);
-
+    size_t scenarioSize = scenario.size() / threads_count;
     std::vector<Scenario<Key, Value>> scenarious(threads_count);
 
     auto it = scenario.begin();
     for (auto& cur_scenario: scenarious) {
-        cur_scenario = std::vector(it, it + threads_count);
+        cur_scenario = std::vector(it, it + scenarioSize);
         if (is_shuffled) {
             std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
         }
-        it += threads_count;
+        it += scenarioSize;
     }
     
     return scenarious;
@@ -199,7 +198,7 @@ void benchmark_name##_##map_name( \
 
 #define GENERATE_MAP_AND_START(benchmark_name, map_name, Key, Value, Map, scenario, scenariousVector) \
 GENERATE_BENCHNARK_CODE(benchmark_name, map_name, Key, Value, Map); \
-BENCHMARK_CAPTURE(benchmark_name##_##map_name, b, scenario, scenariousVector); 
+BENCHMARK_CAPTURE(benchmark_name##_##map_name, Key##_##Value, scenario, scenariousVector)->Unit(benchmark::kMillisecond)->UseRealTime(); 
 
 #define START_BENCHMARK(benchmark_name, Key, Value, scenario, scenariousVector) \
 GENERATE_MAP_AND_START(benchmark_name, stl, Key, Value, concurrent_stl_hash_map, scenario, scenariousVector); \
@@ -208,7 +207,7 @@ GENERATE_MAP_AND_START(benchmark_name, tbb, Key, Value, concurrent_tbb_hash_map,
 
 
 START_BENCHMARK(
-    uint32_uint32_find_exists, 
+    find_exists, 
     uint32_t, 
     uint32_t, 
     generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 1000000, 
@@ -223,7 +222,7 @@ START_BENCHMARK(
             [](){return 0;})))})
 
 START_BENCHMARK(
-    uint32_uint32_find_exists_high_contention, 
+    find_exists_high_contention, 
     uint32_t, 
     uint32_t, 
     generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 20, 
@@ -238,10 +237,10 @@ START_BENCHMARK(
             [](){return 0;})))})
 
 START_BENCHMARK(
-    uint32_uint32_erase_exists, 
+    erase_exists, 
     uint32_t, 
     uint32_t, 
-    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 1000000, 
+    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 16000000, 
         OperationGenerator<uint32_t, uint32_t>(
             [](){static uint32_t key = 0; return ++key;}, 
             [](){return 0;})), 
@@ -252,64 +251,31 @@ START_BENCHMARK(
             [](){static uint32_t key = 0; return ++key;}, 
             [](){return 0;})))})
 
-  START_BENCHMARK(
-    uint32_uint32_insert_then_erase, 
+START_BENCHMARK(
+    data_analytics, 
     uint32_t, 
     uint32_t, 
     {}, 
-    (std::vector{split_scenario_on_scenarious(
+    {get_scenarious_from_scenario(
         16,
-        generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 8000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static uint32_t key = 0; return ++key;}, 
-            [](){return 0;}))),
-      split_scenario_on_scenarious(
+        generate_scenario({{OperationsInfo::Types::INSERT, 10}, 
+                           {OperationsInfo::Types::FIND, 1}}, 100000, 
+            OperationGenerator<uint32_t, uint32_t>(
+                [](){static std::mt19937 gen_32; return gen_32() % 10000;}, 
+                [](){return 0;})))})
+
+START_BENCHMARK(
+    random, 
+    uint32_t, 
+    uint32_t, 
+    {}, 
+    {get_scenarious_from_scenario(
         16,
-        generate_scenario({{OperationsInfo::Types::ERASE, 1}}, 8000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static uint32_t key = 0; return ++key;}, 
-            [](){return 0;})))}))
-
-    START_BENCHMARK(
-        uint32_uint32_insert_then_find, 
-        uint32_t, 
-        uint32_t, 
-        {}, 
-        (std::vector{split_scenario_on_scenarious(
-            16,
-            generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 8000000, 
+        generate_scenario({{OperationsInfo::Types::INSERT, 1}, 
+                           {OperationsInfo::Types::FIND, 10},
+                           {OperationsInfo::Types::ERASE, 1}}, 100000, 
             OperationGenerator<uint32_t, uint32_t>(
-                [](){static uint32_t key = 0; return ++key;}, 
-                [](){return 0;}))),
-        split_scenario_on_scenarious(
-            16,
-            generate_scenario({{OperationsInfo::Types::FIND, 1}}, 8000000, 
-            OperationGenerator<uint32_t, uint32_t>(
-                [](){static uint32_t key = 0; return ++key;}, 
-                [](){return 0;})))}))
-
-    START_BENCHMARK(
-        uint32_uint32_insert_then_find_then_erase, 
-        uint32_t, 
-        uint32_t, 
-        {}, 
-        (std::vector{split_scenario_on_scenarious(
-            16,
-            generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 100000, 
-            OperationGenerator<uint32_t, uint32_t>(
-                [](){static uint32_t key = 0; return ++key;}, 
-                [](){return 0;}))),
-        split_scenario_on_scenarious(
-            16,
-            generate_scenario({{OperationsInfo::Types::FIND, 1}}, 10000000, 
-            OperationGenerator<uint32_t, uint32_t>(
-                [](){static uint32_t key = 0; return ++key;}, 
-                [](){return 0;}))),
-        split_scenario_on_scenarious(
-            16,
-            generate_scenario({{OperationsInfo::Types::ERASE, 1}}, 100000, 
-            OperationGenerator<uint32_t, uint32_t>(
-                [](){static uint32_t key = 0; return ++key;}, 
-                [](){return 0;})))}))
+                [](){static std::mt19937 gen_32; return gen_32() % 10000;}, 
+                [](){return 0;})))})
 
 BENCHMARK_MAIN();
