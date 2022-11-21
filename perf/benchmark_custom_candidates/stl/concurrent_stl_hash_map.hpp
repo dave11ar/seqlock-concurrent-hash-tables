@@ -1,3 +1,5 @@
+#pragma once
+
 #include "oneapi/tbb/spin_mutex.h"
 #include <cstdint>
 #include <unordered_map>

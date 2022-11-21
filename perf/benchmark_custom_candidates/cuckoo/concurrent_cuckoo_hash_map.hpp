@@ -1,3 +1,5 @@
+#pragma once
+
 #include <libcuckoo/cuckoohash_map.hh>
 #include <type_traits>
 

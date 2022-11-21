@@ -5,7 +5,7 @@ project(seqlock_concurrent_hash_map LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2")
 
-add_executable(bench perf/benchmark_hash_map.cpp)
+add_executable(bench perf/benchmarks_main.cpp)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -34,9 +34,5 @@ FetchContent_MakeAvailable(
   googletest
   googlebenchmark
   libcuckoo)
-
-find_package(Boost 1.74.0) 
-
-target_include_directories(bench PRIVATE "${CMAKE_CURRENT_LIST_DIR}/external/boost/sync/include/")
 
 target_link_libraries(bench PRIVATE TBB::tbb benchmark::benchmark libcuckoo)
