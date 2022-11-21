@@ -1,3 +1,5 @@
+#pragma once
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -130,15 +132,22 @@ Scenario<Key, Value> generate_scenario(
 }
 
 template<typename Key, typename Value, template<typename...> typename Map>
+void execute_scenario(
+    Map<Key, Value>& map,
+    const Scenario<Key, Value>& scenario) {
+    for (const auto& operation : scenario) {
+        do_operation(map, operation);
+    }
+}
+
+template<typename Key, typename Value, template<typename...> typename Map>
 void run_pfor_benchmark(
-    const std::vector<Scenario<Key, Value>>& scenarious,
-    Map<Key, Value>& map) {
+    Map<Key, Value>& map,
+    const std::vector<Scenario<Key, Value>>& scenarious) {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, scenarious.size(), 1), 
         [&map, &scenarious](const auto& range) {
             for (auto it = range.begin(); it != range.end(); ++it) {
-                for (const auto& operation : scenarious[it]) {
-                    do_operation(map, operation);
-                }
+                execute_scenario(map, scenarious[it]);
             }
         });
 }
@@ -146,14 +155,11 @@ void run_pfor_benchmark(
 template<typename Key, typename Value>
 std::vector<Scenario<Key, Value>> get_scenarious_from_scenario(
     size_t threads_count, 
-    const Scenario<Key, Value>& scenario,
-    bool is_shuffled = true) {
+    const Scenario<Key, Value>& scenario) {
     std::vector<Scenario<Key, Value>> scenarious(threads_count);
     for (auto& cur_scenario: scenarious) {
         cur_scenario = scenario;
-        if (is_shuffled) {
-            std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
-        }
+        std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
     }
     
     return scenarious;
@@ -162,120 +168,111 @@ std::vector<Scenario<Key, Value>> get_scenarious_from_scenario(
 template<typename Key, typename Value>
 std::vector<Scenario<Key, Value>> split_scenario_on_scenarious(
     size_t threads_count, 
-    const Scenario<Key, Value>& scenario,
-    bool is_shuffled = true) {
+    const Scenario<Key, Value>& scenario) {
     size_t scenarioSize = scenario.size() / threads_count;
     std::vector<Scenario<Key, Value>> scenarious(threads_count);
 
     auto it = scenario.begin();
     for (auto& cur_scenario: scenarious) {
-        cur_scenario = std::vector(it, it + scenarioSize);
-        if (is_shuffled) {
-            std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
-        }
+        cur_scenario = Scenario<Key, Value>(it, it + scenarioSize);
+        std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
         it += scenarioSize;
     }
     
     return scenarious;
 }
 
-
-#define GENERATE_BENCHNARK_CODE(benchmark_name, map_name, Key, Value, Map) \
-void benchmark_name##_##map_name( \
-    benchmark::State& state, \
-    const Scenario<Key, Value>& scenario, \
-    const std::vector<std::vector<Scenario<Key, Value>>>& scenariousVector) { \
-    Map<Key, Value> map; \
-    for (const auto& operation : scenario) { \
-        do_operation(map, operation); \
-    } \
-    for (auto _ : state) { \
-        for (const auto& scenarious : scenariousVector) { \
-            run_pfor_benchmark<Key, Value, Map>(scenarious, map); \
-        } \
-    } \
+template<typename Key, typename Value>
+inline std::function<std::vector<Scenario<Key, Value>>(
+    size_t threads_count, 
+    const Scenario<Key, Value>&)> get_scenarious_function(int64_t arg) {
+    switch (arg) {
+        case 0:
+            return get_scenarious_from_scenario<Key, Value>;
+        case 1:
+            return split_scenario_on_scenarious<Key, Value>;
+    }
+    assert(false);
 }
 
-#define GENERATE_MAP_AND_START(benchmark_name, map_name, Key, Value, Map, scenario, scenariousVector) \
-GENERATE_BENCHNARK_CODE(benchmark_name, map_name, Key, Value, Map); \
-BENCHMARK_CAPTURE(benchmark_name##_##map_name, Key##_##Value, scenario, scenariousVector)->Unit(benchmark::kMillisecond)->UseRealTime(); 
+inline std::function<uint32_t()> get_uint32_key_function(int64_t arg, int64_t max_value) {
+    switch (arg) {
+        case 0:
+            return [max_value]{static std::mt19937 gen_32; return gen_32() % max_value;};
+        case 1:
+            return [] {static uint32_t index = 0; return index++;};
+    }
+    assert(false);
+}
 
-#define START_BENCHMARK(benchmark_name, Key, Value, scenario, scenariousVector) \
-GENERATE_MAP_AND_START(benchmark_name, stl, Key, Value, concurrent_stl_hash_map, scenario, scenariousVector); \
-GENERATE_MAP_AND_START(benchmark_name, cuckoo, Key, Value, concurrent_cuckoo_hash_map, scenario, scenariousVector); \
-GENERATE_MAP_AND_START(benchmark_name, tbb, Key, Value, concurrent_tbb_hash_map, scenario, scenariousVector);
+template<template<typename ...> typename Map>
+static void abstract_uint32_uint32_benchmark(benchmark::State& state) { 
+    const int64_t threads_count = state.range(0);
 
+    const int64_t init_scenario_size = state.range(1);
+    const int64_t running_scenario_scale = state.range(2);
 
-START_BENCHMARK(
-    find_exists, 
-    uint32_t, 
-    uint32_t, 
-    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 1000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static uint32_t key = 0; return ++key;}, 
-            [](){return 0;})), 
-    {split_scenario_on_scenarious(
-        16,
-        generate_scenario({{OperationsInfo::Types::FIND, 1}}, 16000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static std::mt19937 gen_32; return gen_32() % 1000000;}, 
-            [](){return 0;})))})
+    const int64_t key_max_value = state.range(3);
 
-START_BENCHMARK(
-    find_exists_high_contention, 
-    uint32_t, 
-    uint32_t, 
-    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 20, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static uint32_t key = 0; return ++key;}, 
-            [](){return 0;})), 
-    {split_scenario_on_scenarious(
-        16,
-        generate_scenario({{OperationsInfo::Types::FIND, 1}}, 16000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static std::mt19937 gen_32; return gen_32() % 20;}, 
-            [](){return 0;})))})
+    const int64_t running_find = state.range(4);
+    const int64_t running_insert = state.range(5);
+    const int64_t running_erase = state.range(6);
 
-START_BENCHMARK(
-    erase_exists, 
-    uint32_t, 
-    uint32_t, 
-    generate_scenario({{OperationsInfo::Types::INSERT, 1}}, 16000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static uint32_t key = 0; return ++key;}, 
-            [](){return 0;})), 
-    {split_scenario_on_scenarious(
-        16,
-        generate_scenario({{OperationsInfo::Types::ERASE, 1}}, 16000000, 
-        OperationGenerator<uint32_t, uint32_t>(
-            [](){static uint32_t key = 0; return ++key;}, 
-            [](){return 0;})))})
+    const auto init_key_generator = get_uint32_key_function(state.range(7), key_max_value);
+    const auto running_key_generator = get_uint32_key_function(state.range(8), key_max_value);
 
-START_BENCHMARK(
-    data_analytics, 
-    uint32_t, 
-    uint32_t, 
-    {}, 
-    {get_scenarious_from_scenario(
-        16,
-        generate_scenario({{OperationsInfo::Types::INSERT, 10}, 
-                           {OperationsInfo::Types::FIND, 1}}, 100000, 
+    const auto scenarious_generator = get_scenarious_function<uint32_t, uint32_t>(state.range(9));
+
+    for (auto _ : state) {
+        state.PauseTiming();
+        const auto scenarious = scenarious_generator(
+            threads_count,
+            generate_scenario({{OperationsInfo::Types::FIND, running_find},
+                    {OperationsInfo::Types::INSERT, running_insert},
+                    {OperationsInfo::Types::ERASE, running_erase}},
+            running_scenario_scale, 
             OperationGenerator<uint32_t, uint32_t>(
-                [](){static std::mt19937 gen_32; return gen_32() % 10000;}, 
-                [](){return 0;})))})
+                running_key_generator, 
+                [](){return 0;})));
+        
+        char offset[128];
+        Map<uint32_t, uint32_t> map;
+        execute_scenario(
+            map,
+            generate_scenario(
+                {{OperationsInfo::Types::INSERT, 1}}, 
+                init_scenario_size, 
+                OperationGenerator<uint32_t, uint32_t>(
+                    init_key_generator, 
+                    [](){return 0;})));
+        state.ResumeTiming();
 
-START_BENCHMARK(
-    random, 
-    uint32_t, 
-    uint32_t, 
-    {}, 
-    {get_scenarious_from_scenario(
-        16,
-        generate_scenario({{OperationsInfo::Types::INSERT, 1}, 
-                           {OperationsInfo::Types::FIND, 10},
-                           {OperationsInfo::Types::ERASE, 1}}, 100000, 
-            OperationGenerator<uint32_t, uint32_t>(
-                [](){static std::mt19937 gen_32; return gen_32() % 10000;}, 
-                [](){return 0;})))})
+        run_pfor_benchmark(map, scenarious);
+    } 
+}
 
-BENCHMARK_MAIN();
+inline std::vector<int64_t> get_uint32_benchmark_args_named(
+    int64_t threads_count,
+    int64_t init_scenario_size,
+    int64_t running_scenario_scale,
+    int64_t key_max_value,
+    int64_t running_find,
+    int64_t running_insert,
+    int64_t running_erase,
+    int64_t init_key_generator,
+    int64_t running_key_generator,
+    int64_t scenarious_generator
+) {
+    return {threads_count, init_scenario_size, running_scenario_scale, key_max_value,
+        running_find, running_insert, running_erase, init_key_generator, running_key_generator, scenarious_generator};
+}
+
+#define START_BENCHMARK(name, arguments_generator)\
+BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_stl_hash_map)\
+    ->Name(name + "-cuckoo")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();\
+BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_tbb_hash_map)\
+    ->Name(name + "-tbb")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();
+
+//BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_stl_hash_map)\
+//    ->Name(name)->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();
+
