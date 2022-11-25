@@ -45,6 +45,7 @@ namespace OperationsInfo {
     };
 }
 
+using RawScenario = std::vector<OperationsInfo::Types>;
 
 template<typename Key, typename Value>
 using Operation = std::variant<
@@ -87,18 +88,18 @@ template<typename Key, typename Value, template<typename...> typename Map>
 void do_operation(Map<Key, Value>& map, const Operation<Key, Value>& operation) {
     switch (operation.index()) {
         case 0: {
-            const auto& insertInfo = std::get<OperationsInfo::Insert<Key, Value>>(operation);
-            map.insert(insertInfo.key, insertInfo.value);
+            const auto& insert_info = std::get<OperationsInfo::Insert<Key, Value>>(operation);
+            map.insert(insert_info.key, insert_info.value);
             break;
         }
         case 1: {
-            const auto& findInfo = std::get<OperationsInfo::Find<Key>>(operation);
-            map.find(findInfo.key);
+            const auto& find_info = std::get<OperationsInfo::Find<Key>>(operation);
+            map.find(find_info.key);
             break;
         }
         case 2: {
-            const auto& findInfo = std::get<OperationsInfo::Erase<Key>>(operation);
-            map.erase(findInfo.key);
+            const auto& erase_info = std::get<OperationsInfo::Erase<Key>>(operation);
+            map.erase(erase_info.key);
             break;
         }
         default:
@@ -106,26 +107,70 @@ void do_operation(Map<Key, Value>& map, const Operation<Key, Value>& operation) 
     }
 }
 
-size_t calc_distr_count(const std::unordered_map<OperationsInfo::Types, size_t>& operations_distr) {
-    size_t result;
+inline RawScenario generate_raw_scenario(
+    const std::unordered_map<OperationsInfo::Types, size_t>& operations_distr,
+    const size_t& scale) {
+    RawScenario result;
     for (const auto& [operation_type, count] : operations_distr) {
-        result += count;
+        for (size_t i = 0; i < count * scale; ++i) {
+            result.push_back(operation_type);
+        }
     }
+    
+    return result;
+}
 
+inline std::vector<RawScenario> get_raw_scenarious_from_raw_scenario(
+    size_t threads_count, 
+    const RawScenario& scenario) {
+    std::vector<RawScenario> scenarious(threads_count);
+    std::mt19937 gen_32(222);
+    for (auto& cur_scenario: scenarious) {
+        cur_scenario = scenario;
+        std::shuffle(cur_scenario.begin(), cur_scenario.end(), gen_32);
+    }
+    
+    return scenarious;
+}
+
+inline std::vector<RawScenario> split_raw_scenario_on_raw_scenarious(
+    size_t threads_count, 
+    const RawScenario& scenario) {
+    size_t scenario_size = scenario.size() / threads_count;
+    std::vector<RawScenario> scenarious(threads_count);
+    std::mt19937 gen_32(111);
+
+    auto it = scenario.begin();
+    for (auto& cur_scenario: scenarious) {
+        cur_scenario = RawScenario(it, it + scenario_size);
+        std::shuffle(cur_scenario.begin(), cur_scenario.end(), gen_32);
+        it += scenario_size;
+    }
+    
+    return scenarious;
+}
+
+template<typename Key, typename Value>
+Scenario<Key, Value> get_scenario_from_raw(
+    const RawScenario& scenario,
+    const OperationGenerator<Key, Value>& operation_generator) {
+    Scenario<Key, Value> result;
+    result.reserve(scenario.size());
+    for (const auto& operation_type : scenario) {
+        result.push_back(operation_generator(operation_type));
+    }
+    
     return result;
 }
 
 template<typename Key, typename Value>
-Scenario<Key, Value> generate_scenario(
-    const std::unordered_map<OperationsInfo::Types, size_t>& operations_distr,
-    const size_t& scale,
+std::vector<Scenario<Key, Value>> get_scenarious_from_raw(
+    const std::vector<RawScenario>& scenarious,
     const OperationGenerator<Key, Value>& operation_generator) {
-    Scenario<Key, Value> result;
-
-    for (const auto& [operation_type, count] : operations_distr) {
-        for (size_t i = 0; i < count * scale; ++i) {
-            result.push_back(operation_generator(operation_type));
-        }
+    std::vector<Scenario<Key, Value>> result;
+    result.reserve(scenarious.size());
+    for (const auto& scenario : scenarious) {
+        result.push_back(get_scenario_from_raw(scenario, operation_generator));
     }
     
     return result;
@@ -153,44 +198,14 @@ void run_pfor_benchmark(
 }
 
 template<typename Key, typename Value>
-std::vector<Scenario<Key, Value>> get_scenarious_from_scenario(
+inline std::function<std::vector<RawScenario>(
     size_t threads_count, 
-    const Scenario<Key, Value>& scenario) {
-    std::vector<Scenario<Key, Value>> scenarious(threads_count);
-    for (auto& cur_scenario: scenarious) {
-        cur_scenario = scenario;
-        std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
-    }
-    
-    return scenarious;
-}
-
-template<typename Key, typename Value>
-std::vector<Scenario<Key, Value>> split_scenario_on_scenarious(
-    size_t threads_count, 
-    const Scenario<Key, Value>& scenario) {
-    size_t scenarioSize = scenario.size() / threads_count;
-    std::vector<Scenario<Key, Value>> scenarious(threads_count);
-
-    auto it = scenario.begin();
-    for (auto& cur_scenario: scenarious) {
-        cur_scenario = Scenario<Key, Value>(it, it + scenarioSize);
-        std::random_shuffle(cur_scenario.begin(), cur_scenario.end());
-        it += scenarioSize;
-    }
-    
-    return scenarious;
-}
-
-template<typename Key, typename Value>
-inline std::function<std::vector<Scenario<Key, Value>>(
-    size_t threads_count, 
-    const Scenario<Key, Value>&)> get_scenarious_function(int64_t arg) {
+    const RawScenario&)> get_scenarious_function(int64_t arg) {
     switch (arg) {
         case 0:
-            return get_scenarious_from_scenario<Key, Value>;
+            return get_raw_scenarious_from_raw_scenario;
         case 1:
-            return split_scenario_on_scenarious<Key, Value>;
+            return split_raw_scenario_on_raw_scenarious;
     }
     assert(false);
 }
@@ -198,7 +213,7 @@ inline std::function<std::vector<Scenario<Key, Value>>(
 inline std::function<uint32_t()> get_uint32_key_function(int64_t arg, int64_t max_value) {
     switch (arg) {
         case 0:
-            return [max_value]{static std::mt19937 gen_32; return gen_32() % max_value;};
+            return [max_value]{static std::mt19937 gen_32(1337); return gen_32() % max_value;};
         case 1:
             return [] {static uint32_t index = 0; return index++;};
     }
@@ -218,30 +233,31 @@ static void abstract_uint32_uint32_benchmark(benchmark::State& state) {
     const int64_t running_insert = state.range(5);
     const int64_t running_erase = state.range(6);
 
-    const auto init_key_generator = get_uint32_key_function(state.range(7), key_max_value);
-    const auto running_key_generator = get_uint32_key_function(state.range(8), key_max_value);
-
-    const auto scenarious_generator = get_scenarious_function<uint32_t, uint32_t>(state.range(9));
-
     for (auto _ : state) {
         state.PauseTiming();
-        const auto scenarious = scenarious_generator(
+        const auto init_key_generator = get_uint32_key_function(state.range(7), key_max_value);
+        const auto running_key_generator = get_uint32_key_function(state.range(8), key_max_value);
+
+        const auto scenarious_generator = get_scenarious_function<uint32_t, uint32_t>(state.range(9));
+
+        const auto scenarious = get_scenarious_from_raw(scenarious_generator(
             threads_count,
-            generate_scenario({{OperationsInfo::Types::FIND, running_find},
-                    {OperationsInfo::Types::INSERT, running_insert},
-                    {OperationsInfo::Types::ERASE, running_erase}},
-            running_scenario_scale, 
+            generate_raw_scenario({
+                {OperationsInfo::Types::FIND, running_find},
+                {OperationsInfo::Types::INSERT, running_insert},
+                {OperationsInfo::Types::ERASE, running_erase}},
+            running_scenario_scale)),
             OperationGenerator<uint32_t, uint32_t>(
                 running_key_generator, 
-                [](){return 0;})));
+                [](){return 0;}));
         
         char offset[128];
         Map<uint32_t, uint32_t> map;
         execute_scenario(
             map,
-            generate_scenario(
+            get_scenario_from_raw(generate_raw_scenario(
                 {{OperationsInfo::Types::INSERT, 1}}, 
-                init_scenario_size, 
+                init_scenario_size),
                 OperationGenerator<uint32_t, uint32_t>(
                     init_key_generator, 
                     [](){return 0;})));
@@ -268,11 +284,10 @@ inline std::vector<int64_t> get_uint32_benchmark_args_named(
 }
 
 #define START_BENCHMARK(name, arguments_generator)\
-BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_stl_hash_map)\
+BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_cuckoo_hash_map)\
     ->Name(name + "-cuckoo")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();\
 BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_tbb_hash_map)\
-    ->Name(name + "-tbb")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();
-
-//BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_stl_hash_map)\
-//    ->Name(name)->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();
+    ->Name(name + "-tbb")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();\
+// BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_stl_hash_map)\
+//     ->Name(name + "-stl")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();
 

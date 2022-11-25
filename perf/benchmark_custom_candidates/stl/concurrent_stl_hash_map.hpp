@@ -9,7 +9,7 @@
 
 // SHARDS NOW VALID ONLY FOR UINT32_T
 
-constexpr uint32_t shards_pow = 15;
+constexpr uint32_t shards_pow = 16;
 
 template<typename Key, typename Value>
 class concurrent_stl_hash_map {
