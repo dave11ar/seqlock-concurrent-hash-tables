@@ -1,3 +1,5 @@
+#pragma once
+
 #include "../../benchmark_hash_map_framework.hpp"
 
 static void find_exists_uint32_uint32_arguments_threads(benchmark::internal::Benchmark* b) {

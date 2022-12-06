@@ -34,4 +34,5 @@
 build/*
 .cache/*
 external/*
-perf/benchmark_custom_candidates/cuckoo/concurrent_hash_map.hpp
+bench_out.json
+bench_plot.png

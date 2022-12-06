@@ -14,6 +14,7 @@
 #include "benchmark_custom_candidates/stl/concurrent_stl_hash_map.hpp"
 #include "benchmark_custom_candidates/cuckoo/concurrent_cuckoo_hash_map.hpp"
 #include "benchmark_custom_candidates/tbb_hash/concurrent_tbb_hash_map.hpp"
+#include "benchmark_custom_candidates/cuckoo_seqlock/concurrent_cuckoo_seqlock_hash_map.hpp"
 
 namespace OperationsInfo {
     enum class Types {
@@ -208,6 +209,7 @@ inline std::function<std::vector<RawScenario>(
             return split_raw_scenario_on_raw_scenarious;
     }
     assert(false);
+    return {};
 }
 
 inline std::function<uint32_t()> get_uint32_key_function(int64_t arg, int64_t max_value) {
@@ -218,6 +220,7 @@ inline std::function<uint32_t()> get_uint32_key_function(int64_t arg, int64_t ma
             return [] {static uint32_t index = 0; return index++;};
     }
     assert(false);
+    return {};
 }
 
 template<template<typename ...> typename Map>
@@ -284,6 +287,8 @@ inline std::vector<int64_t> get_uint32_benchmark_args_named(
 }
 
 #define START_BENCHMARK(name, arguments_generator)\
+BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_cuckoo_seqlock_hash_map)\
+    ->Name(name + "-cuckoo_seqlock")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();\
 BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_cuckoo_hash_map)\
     ->Name(name + "-cuckoo")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();\
 BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, concurrent_tbb_hash_map)\

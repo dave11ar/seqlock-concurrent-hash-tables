@@ -1,3 +1,5 @@
+#pragma once
+
 #include "../../benchmark_hash_map_framework.hpp"
 
 static void find_exists_high_contentions_uint32_uint32_arguments_threads(benchmark::internal::Benchmark* b) {
@@ -14,5 +16,5 @@ static void find_exists_high_contentions_uint32_uint32_arguments_scale(benchmark
     }
 }
 
-START_BENCHMARK(std::string("find_exists_high_contentions_uint32_uint32-threads"), find_exists_high_contentions_uint32_uint32_arguments_threads)
+//START_BENCHMARK(std::string("find_exists_high_contentions_uint32_uint32-threads"), find_exists_high_contentions_uint32_uint32_arguments_threads)
 START_BENCHMARK(std::string("find_exists_high_contentions_uint32_uint32-scale"), find_exists_high_contentions_uint32_uint32_arguments_scale)
