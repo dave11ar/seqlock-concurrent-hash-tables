@@ -333,7 +333,7 @@ public:
       return 0;
     }
     counter_type s = 0;
-    for (spinlock &lock : get_current_locks()) {
+    for (seqlock &lock : get_current_locks()) {
       s += lock.elem_counter();
     }
     assert(s >= 0);
@@ -461,14 +461,17 @@ public:
    */
   template <typename K, typename F> bool find_fn(const K &key, F fn) const {
     const hash_value hv = hashed_key(key);
-    const auto b = snapshot_and_lock_two<normal_mode>(hv);
-    const table_position pos = cuckoo_find(key, hv.partial, b.i1, b.i2);
-    if (pos.status == ok) {
-      fn(buckets_[pos.index].mapped(pos.slot));
-      return true;
-    } else {
-      return false;
-    }
+
+    return do_under_read_lock<bool>(hv, 
+      [&](const TwoBuckets& b){
+        const table_position pos = cuckoo_find(key, hv.partial, b.i1, b.i2);
+        if (pos.status == ok) {
+          fn(buckets_[pos.index].mapped(pos.slot));
+          return true;
+        } else {
+          return false;
+        }
+      });
   }
 
   /**
@@ -592,13 +595,16 @@ public:
    */
   template <typename K> mapped_type find(const K &key) const {
     const hash_value hv = hashed_key(key);
-    const auto b = snapshot_and_lock_two<normal_mode>(hv);
-    const table_position pos = cuckoo_find(key, hv.partial, b.i1, b.i2);
-    if (pos.status == ok) {
-      return buckets_[pos.index].mapped(pos.slot);
-    } else {
-      throw std::out_of_range("key not found in table");
-    }
+
+    return do_under_read_lock(hv, 
+      [&](const TwoBuckets& b) {
+        const table_position pos = cuckoo_find(key, hv.partial, b.i1, b.i2);
+        if (pos.status == ok) {
+          return buckets_[pos.index].mapped(pos.slot);
+        } else {
+          throw std::out_of_range("key not found in table");
+        }
+      });
   }
 
   /**
@@ -798,31 +804,41 @@ private:
   // acquire the lock must also migrate the corresponding buckets if
   // !is_migrated.
   LIBCUCKOO_SQUELCH_PADDING_WARNING
-  class LIBCUCKOO_ALIGNAS(64) spinlock {
+  class LIBCUCKOO_ALIGNAS(64) seqlock {
   public:
-    spinlock() : elem_counter_(0), is_migrated_(true) { lock_.clear(); }
-
-    spinlock(const spinlock &other) noexcept
-        : elem_counter_(other.elem_counter()),
-          is_migrated_(other.is_migrated()) {
-      lock_.clear();
+    seqlock() : elem_counter_(0), is_migrated_(true) {
+      lock_.store(0, std::memory_order_release); 
     }
 
-    spinlock &operator=(const spinlock &other) noexcept {
+    seqlock(const seqlock &other) noexcept
+        : elem_counter_(other.elem_counter()),
+          is_migrated_(other.is_migrated()) {
+      lock_.store(0, std::memory_order_release);
+    }
+
+    seqlock &operator=(const seqlock &other) noexcept {
       elem_counter() = other.elem_counter();
       is_migrated() = other.is_migrated();
       return *this;
     }
 
     void lock() noexcept {
-      while (lock_.test_and_set(std::memory_order_acq_rel))
-        ;
+      while (!try_lock());
     }
 
-    void unlock() noexcept { lock_.clear(std::memory_order_release); }
+    void unlock() noexcept { 
+      lock_.fetch_add(1, std::memory_order_release);
+    }
 
     bool try_lock() noexcept {
-      return !lock_.test_and_set(std::memory_order_acq_rel);
+      uint32_t lock_value = lock_.load(std::memory_order_release);
+      return ((lock_value & 1) != 0) 
+        ? false 
+        : lock_.compare_exchange_strong(lock_value, lock_value + 1, std::memory_order_acq_rel);
+    }
+
+    uint32_t get_value() noexcept {
+      return lock_.load(std::memory_order_release);
     }
 
     counter_type &elem_counter() noexcept { return elem_counter_; }
@@ -832,7 +848,7 @@ private:
     bool is_migrated() const noexcept { return is_migrated_; }
 
   private:
-    std::atomic_flag lock_;
+    std::atomic_uint32_t lock_;
     counter_type elem_counter_;
     bool is_migrated_;
   };
@@ -841,7 +857,7 @@ private:
   using rebind_alloc =
       typename std::allocator_traits<allocator_type>::template rebind_alloc<U>;
 
-  using locks_t = std::vector<spinlock, rebind_alloc<spinlock>>;
+  using locks_t = std::vector<seqlock, rebind_alloc<seqlock>>;
   using all_locks_t = std::list<locks_t, rebind_alloc<locks_t>>;
 
   // Classes for managing locked buckets. By storing and moving around sets of
@@ -849,10 +865,10 @@ private:
   // properly.
 
   struct LockDeleter {
-    void operator()(spinlock *l) const { l->unlock(); }
+    void operator()(seqlock *l) const { l->unlock(); }
   };
 
-  using LockManager = std::unique_ptr<spinlock, LockDeleter>;
+  using LockManager = std::unique_ptr<seqlock, LockDeleter>;
 
   // Each of the locking methods can operate in two modes: locked_table_mode
   // and normal_mode. When we're in locked_table_mode, we assume the caller has
@@ -887,7 +903,7 @@ private:
     void operator()(cuckoohash_map *map) const {
       for (auto it = first_locked; it != map->all_locks_.end(); ++it) {
         locks_t &locks = *it;
-        for (spinlock &lock : locks) {
+        for (seqlock &lock : locks) {
           lock.unlock();
         }
       }
@@ -906,7 +922,7 @@ private:
   // check the hashpower to make sure it is the same as what it was before the
   // lock was taken. If it isn't unlock the bucket and throw a
   // hashpower_changed exception.
-  inline void check_hashpower(size_type hp, spinlock &lock) const {
+  inline void check_hashpower(size_type hp, seqlock &lock) const {
     if (hashpower() != hp) {
       lock.unlock();
       LIBCUCKOO_DBG("%s", "hashpower changed\n");
@@ -933,7 +949,7 @@ private:
   template <bool IS_LAZY>
   void rehash_lock(size_t l) const noexcept {
     locks_t &locks = get_current_locks();
-    spinlock &lock = locks[l];
+    seqlock &lock = locks[l];
     if (lock.is_migrated()) return;
 
     assert(is_data_nothrow_move_constructible());
@@ -963,7 +979,7 @@ private:
   LockManager lock_one(size_type hp, size_type i, normal_mode) const {
     locks_t &locks = get_current_locks();
     const size_type l = lock_ind(i);
-    spinlock &lock = locks[l];
+    seqlock &lock = locks[l];
     lock.lock();
     check_hashpower(hp, lock);
     rehash_lock<kIsLazy>(l);
@@ -1061,6 +1077,35 @@ private:
     }
   }
 
+  template <typename ReturnValue>  
+  ReturnValue do_under_read_lock(const hash_value &hv, std::function<ReturnValue(const TwoBuckets&)> func) const {
+    while (true) {
+      // Keep the current hashpower and locks we're using to compute the buckets
+      const size_type hp = hashpower();
+      const size_type i1 = index_hash(hp, hv.hash);
+      const size_type i2 = alt_index(hp, hv.partial, i1);
+
+      size_type l1 = lock_ind(i1);
+      size_type l2 = lock_ind(i2);
+
+      locks_t &locks = get_current_locks();
+      
+      const auto lock1_value = locks[l1].get_value();
+      if ((lock1_value & 1) != 0) {
+        continue;
+      }
+      const auto lock2_value = locks[l2].get_value();
+      if ((lock2_value & 1) != 0) {
+        continue;
+      }
+
+      const auto result = func(TwoBuckets(i1, i2, locked_table_mode()));
+      if (lock1_value == locks[l1].get_value() && lock2_value == locks[l2].get_value()) {
+        return result;
+      }
+    }
+  }
+
   // lock_all takes all the locks, and returns a deleter object that releases
   // the locks upon destruction. It does NOT perform any hashpower checks, or
   // rehash any un-migrated buckets.
@@ -1079,7 +1124,7 @@ private:
     auto current_locks = first_locked;
     while (current_locks != all_locks_.end()) {
       locks_t &locks = *current_locks;
-      for (spinlock &lock : locks) {
+      for (seqlock &lock : locks) {
         lock.lock();
       }
       ++current_locks;
@@ -1722,7 +1767,7 @@ private:
     } else {
       // Mark all current locks as un-migrated, so that we rehash the data
       // on-demand when the locks are taken.
-      for (spinlock &lock : current_locks) {
+      for (seqlock &lock : current_locks) {
         lock.is_migrated() = false;
       }
       num_remaining_lazy_rehash_locks(current_locks.size());
@@ -1824,7 +1869,7 @@ private:
     new_locks.resize(std::min(size_type(kMaxNumLocks), new_bucket_count));
     assert(new_locks.size() > current_locks.size());
     std::copy(current_locks.begin(), current_locks.end(), new_locks.begin());
-    for (spinlock &lock : new_locks) {
+    for (seqlock &lock : new_locks) {
       lock.lock();
     }
     all_locks_.emplace_back(std::move(new_locks));
@@ -1969,7 +2014,7 @@ private:
     // This will also clear out any data in old_buckets and delete it, if we
     // haven't already.
     num_remaining_lazy_rehash_locks(0);
-    for (spinlock &lock : get_current_locks()) {
+    for (seqlock &lock : get_current_locks()) {
       lock.elem_counter() = 0;
       lock.is_migrated() = true;
     }
@@ -2521,6 +2566,7 @@ public:
 
     template <typename K> iterator find(const K &key) {
       const hash_value hv = map_.get().hashed_key(key);
+      
       const auto b =
           map_.get().template snapshot_and_lock_two<locked_table_mode>(hv);
       const table_position pos =
