@@ -1,38 +1,32 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.15)
 
-project(seqlock_concurrent_hash_map LANGUAGES CXX)
+set (CMAKE_C_COMPILER "clang")
+set (CMAKE_CXX_COMPILER "clang++")
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2")
+project (seqlock_concurrent_hash_map LANGUAGES CXX)
 
-add_executable(bench perf/benchmarks_main.cpp)
+set (CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include(FetchContent)
-FetchContent_Declare(
-  onetbb
-  GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-  GIT_TAG v2021.6.0
-)
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG release-1.12.1
-)
-FetchContent_Declare(
-  googlebenchmark
-  GIT_REPOSITORY https://github.com/google/benchmark.git
-  GIT_TAG v1.7.1
-)
-FetchContent_Declare(
-  libcuckoo
-  GIT_REPOSITORY https://github.com/efficient/libcuckoo.git
-  GIT_TAG v0.3.1
-)
+set (CMAKE_CXX_STANDARD 20)
 
-FetchContent_MakeAvailable(
-  onetbb
-  googletest
-  googlebenchmark
-  libcuckoo)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
 
-target_link_libraries(bench PRIVATE TBB::tbb benchmark::benchmark libcuckoo)
+if (NOT ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libstdc++ -pthread")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libstdc++")
+endif()
+
+set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast")
+
+option(ENABLE_SANITIZERS "Enable sanitizers" OFF)
+if(ENABLE_SANITIZERS)
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover=all -gdwarf-4")
+  set(CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined,leak")
+endif()
+
+include_directories(PUBLIC include)
+
+add_subdirectory(bench)
+
+enable_testing()
+add_subdirectory(tests/cuckoo)
