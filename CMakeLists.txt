@@ -18,13 +18,13 @@ endif()
 
 set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast")
 
-option(ENABLE_SANITIZERS "Enable sanitizers" OFF)
+option(ENABLE_SANITIZERS "Enable sanitizers" ON)
 if(ENABLE_SANITIZERS)
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover=all -gdwarf-4")
   set(CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined,leak")
 endif()
 
-include_directories(PUBLIC include)
+include_directories(PUBLIC include/common include/hash_maps)
 
 add_subdirectory(bench)
 

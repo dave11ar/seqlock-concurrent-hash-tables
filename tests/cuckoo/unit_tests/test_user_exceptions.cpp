@@ -6,7 +6,7 @@
 
 #include <cuckoo/cuckoohash_map.hpp>
 
-using cuckoo_seqlock::UnitTestInternalAccess;
+using seqlock_lib::cuckoo::UnitTestInternalAccess;
 
 void maybeThrow(bool throwException) {
   if (throwException) {
@@ -72,7 +72,7 @@ template <> struct equal_to<ExceptionInt> {
 };
 }
 
-typedef cuckoo_seqlock::cuckoohash_map<ExceptionInt, size_t, std::hash<ExceptionInt>,
+typedef seqlock_lib::cuckoo::cuckoohash_map<ExceptionInt, size_t, std::hash<ExceptionInt>,
                        std::equal_to<ExceptionInt>>
     exceptionTable;
 

@@ -1,24 +1,22 @@
 #pragma once
 
-#include <optional>
-
-#include <libcuckoo/cuckoohash_map.hh>
+#include <cuckoo/cuckoohash_map.hpp>
 
 template<typename Key, typename Value>
-class cuckoo_hash_map {
-  libcuckoo::cuckoohash_map<Key, Value> map;
+class seqlock_cuckoohash_map {
+  seqlock_lib::cuckoo::cuckoohash_map<Key, Value> map;
 
 public:
-  cuckoo_hash_map() = default;
-  cuckoo_hash_map(size_t n) : map(n) {}
-
-  void insert(const Key& key, const Value& value) {
-    map.insert(key, value);
-  }
+  seqlock_cuckoohash_map() = default;
+  seqlock_cuckoohash_map(size_t n) : map(n) {}
 
   std::optional<Value> find(const Key& key) {
     Value result;
     return map.find(key, result) ? result : std::optional<Value>();
+  }
+
+  void insert(const Key& key, const Value& value) {
+    map.insert(key, value);
   }
 
   void erase(const Key& key) {

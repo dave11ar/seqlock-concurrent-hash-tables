@@ -1,19 +1,18 @@
 #pragma once
 
-#include "seqlock.hpp"
 #include "data_storage.hpp"
 
-namespace cuckoo_seqlock {
+namespace seqlock_lib {
 
-template <typename Allocator>
-class lock_container : public data_storage<seqlock, Allocator> {
-  using data_storage_base_t = data_storage<seqlock, Allocator>;
+template <typename Lock, typename Allocator>
+class lock_container : public data_storage<Lock, Allocator> {
+  using data_storage_base_t = data_storage<Lock, Allocator>;
 
   void copy(const lock_container& other) {
     auto it = this->begin();
 
-    for (const seqlock& lock : other) {
-      it->set_migrated(lock.is_migrated());
+    for (const Lock& lock : other) {
+      it->set_migrated(Lock::is_migrated(lock.get_epoch()));
       it->elem_counter() = lock.elem_counter();
 
       ++it;
@@ -34,6 +33,7 @@ class lock_container : public data_storage<seqlock, Allocator> {
       copy(other);
     }
   }
+
 public:
   lock_container(size_t hp, const Allocator& allocator) 
       : data_storage_base_t(hp, allocator) {}
@@ -72,4 +72,4 @@ public:
   }
 };
 
-} // cuckoo_seqlock
+} // namespace seqlock_lib

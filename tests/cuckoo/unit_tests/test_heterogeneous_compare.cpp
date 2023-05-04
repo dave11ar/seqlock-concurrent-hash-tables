@@ -53,7 +53,7 @@ public:
   }
 };
 
-typedef cuckoo_seqlock::cuckoohash_map<Foo, bool, foo_hasher, foo_eq> foo_map;
+typedef seqlock_lib::cuckoo::cuckoohash_map<Foo, bool, foo_hasher, foo_eq> foo_map;
 
 class HeterogeneousCompare : public ::testing::Test {
  protected:

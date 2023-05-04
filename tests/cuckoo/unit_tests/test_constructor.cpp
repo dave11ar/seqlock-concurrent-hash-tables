@@ -9,10 +9,10 @@ TEST(Constructor, DefaultSize) {
   IntIntTable tbl;
   ASSERT_EQ(tbl.size(), 0);
   ASSERT_TRUE(tbl.empty());
-  if (cuckoo_seqlock::DEFAULT_SIZE < 4) {
+  if (seqlock_lib::cuckoo::DEFAULT_SIZE < 4) {
     ASSERT_EQ(tbl.hashpower(), 0);
   } else {
-    ASSERT_EQ(tbl.hashpower(), (size_t)log2(static_cast<double>(cuckoo_seqlock::DEFAULT_SIZE) / 4));
+    ASSERT_EQ(tbl.hashpower(), (size_t)log2(static_cast<double>(seqlock_lib::cuckoo::DEFAULT_SIZE) / 4));
   }
   ASSERT_EQ(tbl.bucket_count(), 1UL << tbl.hashpower());
   ASSERT_EQ(tbl.load_factor(), 0);
@@ -34,7 +34,7 @@ TEST(Constructor, FreesEvenWithExceptions) {
   ASSERT_EQ(get_unfreed_bytes(), 0);
 
   typedef IntIntTableWithAlloc<
-      TrackingAllocator<int, cuckoo_seqlock::UnitTestInternalAccess::IntIntBucketSize>>
+      TrackingAllocator<int, seqlock_lib::cuckoo::UnitTestInternalAccess::IntIntBucketSize>>
       some_space_table;
   // Should throw when allocating things after the bucket
   ASSERT_THROW(some_space_table(1), std::bad_alloc);
@@ -104,7 +104,7 @@ bool operator!=(const StatefulAllocator<T> &a1,
 
 using alloc_t = StatefulAllocator<std::pair<const int, int>>;
 using tbl_t =
-    cuckoo_seqlock::cuckoohash_map<int, int, StatefulHash, StatefulKeyEqual, alloc_t, 4>;
+    seqlock_lib::cuckoo::cuckoohash_map<int, int, StatefulHash, StatefulKeyEqual, alloc_t, 4>;
 
 TEST(Constructor, StatefulComponents) {
   tbl_t map(8, StatefulHash(10), StatefulKeyEqual(20), alloc_t(30));

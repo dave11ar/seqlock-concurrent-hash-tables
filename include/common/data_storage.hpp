@@ -1,11 +1,11 @@
 #pragma once
 
 #include <bit>
+#include <array>
 
-#include "cuckoohash_util.hpp"
-#include <iostream>
+#include "utils.hpp"
 
-namespace cuckoo_seqlock {
+namespace seqlock_lib {
 
 template <typename Value, typename Allocator>
 class data_storage {
@@ -54,6 +54,23 @@ public:
     iterator operator++(int) {
       iterator result(*this);
       ++(*this);
+      return result;
+    }
+
+    iterator& operator--() {
+      if (data_index == 0) {
+        --array_iterator;
+        --array_index;
+        data_index = size_by_index(array_index) - 1;
+      } else {
+        --data_index;
+      }
+
+      return *this;
+    }
+    iterator operator--(int) {
+      iterator result(*this);
+      --(*this);
       return result;
     }
 
@@ -234,4 +251,4 @@ protected:
   CopyableAtomic<int32_t> hp_;
 };
 
-} // namespace cuckoo_seqlock
+} // namespace seqlock_lib

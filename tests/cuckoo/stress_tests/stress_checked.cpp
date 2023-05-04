@@ -70,8 +70,8 @@ public:
     }
   }
 
-  cuckoo_seqlock::cuckoohash_map<KType, ValType> table;
-  cuckoo_seqlock::cuckoohash_map<KType, ValType2> table2;
+  seqlock_lib::cuckoo::cuckoohash_map<KType, ValType> table;
+  seqlock_lib::cuckoo::cuckoohash_map<KType, ValType2> table2;
   std::vector<KType> keys;
   std::vector<ValType> vals;
   std::vector<ValType2> vals2;

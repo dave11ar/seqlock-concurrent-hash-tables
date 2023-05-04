@@ -1,6 +1,6 @@
 #pragma once
 
-#include <benchmark_hash_map_framework.hpp>
+#include "../../benchmark_hash_map_framework.hpp"
 
 static int32_t threads_step = 1;
 static int32_t threads_count = 48;

@@ -72,15 +72,15 @@ bool operator!=(const TrackingAllocator<T, BOUND> &a1,
 }
 
 using IntIntTable =
-    cuckoo_seqlock::cuckoohash_map<int, int, std::hash<int>, std::equal_to<int>,
+    seqlock_lib::cuckoo::cuckoohash_map<int, int, std::hash<int>, std::equal_to<int>,
                    std::allocator<std::pair<const int, int>>, 4>;
 
 template <class Alloc>
 using IntIntTableWithAlloc =
-    cuckoo_seqlock::cuckoohash_map<int, int, std::hash<int>, std::equal_to<int>, Alloc, 4>;
+    seqlock_lib::cuckoo::cuckoohash_map<int, int, std::hash<int>, std::equal_to<int>, Alloc, 4>;
 
 using StringIntTable =
-    cuckoo_seqlock::cuckoohash_map<std::string, int, std::hash<std::string>,
+    seqlock_lib::cuckoo::cuckoohash_map<std::string, int, std::hash<std::string>,
                    std::equal_to<std::string>,
                    std::allocator<std::pair<const std::string, int>>, 4>;
 
@@ -109,14 +109,14 @@ template <typename T> struct equal_to<unique_ptr<T>> {
 }
 
 template <typename T>
-using UniquePtrTable = cuckoo_seqlock::cuckoohash_map<
+using UniquePtrTable = seqlock_lib::cuckoo::cuckoohash_map<
     std::unique_ptr<T>, std::unique_ptr<T>, std::hash<std::unique_ptr<T>>,
     std::equal_to<std::unique_ptr<T>>,
     std::allocator<std::pair<const std::unique_ptr<T>, std::unique_ptr<T>>>, 4>;
 
 // Some unit tests need access into certain private data members of the table.
 // This class is a friend of the table, so it can access those.
-namespace cuckoo_seqlock {
+namespace seqlock_lib::cuckoo {
 
 class UnitTestInternalAccess {
 public:
@@ -157,4 +157,4 @@ public:
   }
 };
 
-} // namespace cuckoo_seqlock
+} // namespace seqlock_lib::cuckoo

@@ -1,6 +1,5 @@
 #include <cstring>
 
-#include "benchmarks/uint32_uint32/data_analytics.hpp"
 #include "benchmarks/uint32_uint32/erase_exists.hpp"
 #include "benchmarks/uint32_uint32/find_exists_high_contention.hpp"
 #include "benchmarks/uint32_uint32/find_exists.hpp"
@@ -8,6 +7,7 @@
 #include "benchmarks/uint32_uint32/find_modify_eq.hpp"
 #include "benchmarks/uint32_uint32/find_upsert_high_contention.hpp"
 #include "benchmarks/uint32_uint32/find_upsert.hpp"
+#include "benchmarks/uint32_uint32/inserts.hpp"
 #include "benchmarks/uint32_uint32/random.hpp"
 
 bool ParseInt32Flag(const char* arg, const char* flag, int32_t& value) {
@@ -43,9 +43,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-#ifdef UIN32_UINT32_BENCHMARK_DATA_ANALYTICS
-  START_BENCHMARK(std::string("data_analytics_uint32_uint32"), data_analytics_uint32_uint32_arguments)
-#endif
 #ifdef UIN32_UINT32_BENCHMARK_ERASE_EXISTS
   START_BENCHMARK(std::string("erase_exists_uint32_uint32"), erase_exists_uint32_uint32_arguments)
 #endif
@@ -66,6 +63,9 @@ int main(int argc, char** argv) {
 #endif
 #ifdef UIN32_UINT32_BENCHMARK_FIND_UPSERT
   START_BENCHMARK(std::string("find_upsert_uint32_uint32"), find_upsert_uint32_uint32_arguments)
+#endif
+#ifdef UIN32_UINT32_BENCHMARK_INSERTS
+  START_BENCHMARK(std::string("inserts_uint32_uint32"), inserts_uint32_uint32_arguments)
 #endif
 #ifdef UIN32_UINT32_BENCHMARK_RANDOM
   START_BENCHMARK(std::string("random_uint32_uint32"), random_uint32_uint32_arguments)

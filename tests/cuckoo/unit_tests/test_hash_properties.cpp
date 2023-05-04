@@ -2,7 +2,7 @@
 
 #include "unit_test_util.hpp"
 
-using cuckoo_seqlock::UnitTestInternalAccess;
+using seqlock_lib::cuckoo::UnitTestInternalAccess;
 
 // Checks that the alt index function returns a different bucket, and can
 // recover the old bucket when called with the alternate bucket as the index.

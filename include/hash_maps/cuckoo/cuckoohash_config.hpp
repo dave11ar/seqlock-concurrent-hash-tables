@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <limits>
 
-namespace cuckoo_seqlock {
+namespace seqlock_lib::cuckoo {
 
 //! The default maximum number of keys per bucket
 constexpr size_t DEFAULT_SLOT_PER_BUCKET = 4;
@@ -27,4 +27,4 @@ constexpr size_t NO_MAXIMUM_HASHPOWER =
 //! set LIBCUCKOO_DEBUG to 1 to enable debug output
 #define LIBCUCKOO_DEBUG 0
 
-}  // namespace cuckoo_seqlock
+}  // namespace seqlock_lib::cuckoo

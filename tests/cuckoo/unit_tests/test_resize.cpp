@@ -5,7 +5,7 @@
 
 #include "unit_test_util.hpp"
 
-using cuckoo_seqlock::UnitTestInternalAccess;
+using seqlock_lib::cuckoo::UnitTestInternalAccess;
 
 TEST(RehashEmptyTable, Resize) {
   IntIntTable table(1);
@@ -91,7 +91,7 @@ TEST(ResizingNumberOfFrees, Resize) {
   size_t num_deletes_after_resize;
   {
     // Should allocate 2 buckets of 4 slots
-    cuckoo_seqlock::cuckoohash_map<int, my_type, std::hash<int>, std::equal_to<int>,
+    seqlock_lib::cuckoo::cuckoohash_map<int, my_type, std::hash<int>, std::equal_to<int>,
                    std::allocator<std::pair<const int, my_type>>, 4>
         map(8);
     for (int i = 0; i < 9; ++i) {
@@ -127,7 +127,7 @@ public:
 };
 
 TEST(ResizeOnNonRelocatableType, Resize) {
-  cuckoo_seqlock::cuckoohash_map<int, NonRelocatableType, std::hash<int>, std::equal_to<int>,
+  seqlock_lib::cuckoo::cuckoohash_map<int, NonRelocatableType, std::hash<int>, std::equal_to<int>,
                  std::allocator<std::pair<const int, NonRelocatableType>>, 1>
       map(0);
   ASSERT_EQ(map.hashpower(), 0);

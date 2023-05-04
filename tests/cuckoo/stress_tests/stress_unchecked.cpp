@@ -63,12 +63,12 @@ public:
     // operations don't throw exceptions.
     table.minimum_load_factor(0.0);
     table2.minimum_load_factor(0.0);
-    table.maximum_hashpower(cuckoo_seqlock::NO_MAXIMUM_HASHPOWER);
-    table2.maximum_hashpower(cuckoo_seqlock::NO_MAXIMUM_HASHPOWER);
+    table.maximum_hashpower(seqlock_lib::cuckoo::NO_MAXIMUM_HASHPOWER);
+    table2.maximum_hashpower(seqlock_lib::cuckoo::NO_MAXIMUM_HASHPOWER);
   }
 
-  cuckoo_seqlock::cuckoohash_map<KType, ValType> table;
-  cuckoo_seqlock::cuckoohash_map<KType, ValType2> table2;
+  seqlock_lib::cuckoo::cuckoohash_map<KType, ValType> table;
+  seqlock_lib::cuckoo::cuckoohash_map<KType, ValType2> table2;
   size_t gen_seed;
   std::atomic<bool> finished;
 };
@@ -161,8 +161,8 @@ void resize_thread(AllEnvironment<KType> *env, size_t thread_seed) {
     env->table.rehash_concurrent(hashpower / 2);
   } else {
     env->table2.reserve_concurrent((1U << (hashpower + 1)) *
-                        cuckoo_seqlock::DEFAULT_SLOT_PER_BUCKET);
-    env->table2.reserve_concurrent((1U << hashpower) * cuckoo_seqlock::DEFAULT_SLOT_PER_BUCKET);
+                        seqlock_lib::cuckoo::DEFAULT_SLOT_PER_BUCKET);
+    env->table2.reserve_concurrent((1U << hashpower) * seqlock_lib::cuckoo::DEFAULT_SLOT_PER_BUCKET);
   }
 }
 

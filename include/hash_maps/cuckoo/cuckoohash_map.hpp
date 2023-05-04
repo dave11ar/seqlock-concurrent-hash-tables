@@ -1,15 +1,16 @@
 #pragma once
 
-#include <atomic>
 #include <cassert>
-#include <iostream>
 #include <vector>
 #include <optional>
 
-#include "lock_storage.hpp"
-#include "bucket_container.hpp"
+#include <seqlock.hpp>
+#include <lock_container.hpp>
 
-namespace cuckoo_seqlock {
+#include "cuckoo_bucket_container.hpp"
+#include "cuckoohash_util.hpp"
+
+namespace seqlock_lib::cuckoo {
 
 /**
  * A concurrent hash table
@@ -34,7 +35,7 @@ private:
 
   // The type of the buckets container
   using buckets_t =
-      bucket_container<Key, T, Allocator, partial_t, SLOT_PER_BUCKET>;
+      cuckoo_bucket_container<Key, T, Allocator, partial_t, SLOT_PER_BUCKET>;
 
 public:
   // The type of the bucket
@@ -513,9 +514,10 @@ public:
     TwoBuckets b = snapshot_and_lock_two<normal_mode>(hv);
     table_position pos = cuckoo_insert_loop<normal_mode>(hv, b, key);
     if (pos.status == ok) {
-      add_to_bucket(pos.index, 
+      add_to_bucket(*b.lock1, 
+                    *pos.bucket_, 
                     pos.slot, 
-                    hv.partial, 
+                    hv.partial,
                     std::forward<K>(key),
                     std::forward<Args>(val)...);
     } else {
@@ -748,17 +750,13 @@ private:
   using rebind_alloc =
       typename std::allocator_traits<allocator_type>::template rebind_alloc<U>;
 
-  using locks_t = lock_container<Allocator>;
+  using locks_t = lock_container<seqlock, Allocator>;
 
   // Classes for managing locked buckets. By storing and moving around sets of
   // locked buckets in these classes, we can ensure that they are unlocked
   // properly.
 
-  struct LockDeleter {
-    void operator()(seqlock* l) const { l->unlock(); }
-  };
-
-  using LockManager = std::unique_ptr<seqlock, LockDeleter>;
+  using LockManager = std::unique_ptr<seqlock, LockDeleter<seqlock>>;
 
   // Each of the locking methods can operate in two modes: locked_table_mode
   // and normal_mode. When we're in locked_table_mode, we assume the caller has
@@ -782,17 +780,17 @@ private:
         lock1.reset();
 
         if (i1 != i2) {
-        lock2.reset();
+          lock2.reset();
         }
       } else {
         if (lock1 != nullptr) {
           lock1->unlock_no_modified();
-          lock1.release();
+          (void)lock1.release();
         }
 
         if (i1 != i2 && lock2 != nullptr) {
           lock2->unlock_no_modified();
-          lock2.release();
+          (void)lock2.release();
         }
       }
     }
@@ -812,10 +810,6 @@ private:
 
   using AllLocksManager = std::unique_ptr<cuckoohash_map, AllUnlocker>;
 
-  // This exception is thrown whenever we try to lock a bucket, but the
-  // hashpower is not what was expected
-  class hashpower_changed {};
-
   // After taking a lock on the table for the given bucket, this function will
   // check the hashpower to make sure it is the same as what it was before the
   // lock was taken. If it isn't unlock the bucket and throw a
@@ -833,8 +827,9 @@ private:
     assert(is_data_nothrow_move_constructible());
     assert(locks_.size() == kMaxNumLocks);
 
+    const int32_t hp = hashpower() - 1;
     for (size_type bucket_ind = l; bucket_ind < (buckets_.size() >> 1); bucket_ind += kMaxNumLocks) {
-      move_bucket(hashpower() - 1, bucket_ind, buckets_[bucket_ind], buckets_[bucket_ind + hashsize(hashpower() - 1)], 
+      move_bucket(hp, bucket_ind, buckets_[bucket_ind], buckets_[bucket_ind + hashsize(hashpower() - 1)], 
       [this, bucket_ind](size_type old_bucket_slot){
         buckets_.eraseKV(bucket_ind, old_bucket_slot);
       });
@@ -848,11 +843,14 @@ private:
   seqlock* lock_and_rehash(size_type l) const {
     seqlock* lock = &locks_[l];
 
+    seqlock_epoch_t lock_value;
     if constexpr (std::is_same<TABLE_MODE, normal_mode>::value) {
-      lock->lock();
+      lock_value = lock->lock();
+    } else {
+      lock_value = lock->get_epoch();
     }
 
-    if (!lock->is_migrated()) {
+    if (!seqlock::is_migrated(lock_value)) {
       migrate_lock(l);
       lock->set_migrated(true);
     }
@@ -881,7 +879,6 @@ private:
                       locked_table_mode) const {
     return TwoBuckets(i1, i2, locked_table_mode());
   }
-
   TwoBuckets lock_two(size_type hp, size_type i1, size_type i2,
                       normal_mode) const {
     size_type l1 = lock_ind(i1);
@@ -908,24 +905,29 @@ private:
   // active if i3 shares a lock index with i1 or i2.
   //
   // throws hashpower_changed if it changed after taking the lock.
-  std::pair<TwoBuckets, LockManager> lock_three(size_type, size_type i1,
-                                                size_type i2, size_type,
+  std::pair<TwoBuckets, LockManager> lock_three(size_type, std::array<size_type, 3> i,
                                                 locked_table_mode) const {
-    return std::make_pair(TwoBuckets(i1, i2, locked_table_mode()),
+    return std::make_pair(TwoBuckets(i[0], i[1], locked_table_mode()),
                           LockManager());
   }
 
-  std::pair<TwoBuckets, LockManager> lock_three(size_type hp, size_type i1,
-                                                size_type i2, size_type i3,
-                                                normal_mode) const {
-    std::array<size_type, 3> l{{lock_ind(i1), lock_ind(i2), lock_ind(i3)}};
+  std::pair<TwoBuckets, LockManager> lock_three(
+      size_type hp, std::array<size_type, 3> i, normal_mode) const {
+    std::array<size_type, 3> l{{lock_ind(i[0]), lock_ind(i[1]), lock_ind(i[2])}};
+    std::array<uint8_t, 3> l2i{{0, 1, 2}};
     // Lock in order.
-    if (l[2] < l[1])
+    if (l[2] < l[1]) {
       std::swap(l[2], l[1]);
-    if (l[2] < l[0])
+      std::swap(l2i[2], l2i[1]);
+    }
+    if (l[2] < l[0]) {
       std::swap(l[2], l[0]);
-    if (l[1] < l[0])
+      std::swap(l2i[2], l2i[0]);
+    }
+    if (l[1] < l[0]) {
       std::swap(l[1], l[0]);
+      std::swap(l2i[1], l2i[0]);
+    }
 
     std::array<seqlock*, 3> cur_locks{{
       lock_and_rehash<normal_mode>(l[0]), 
@@ -934,18 +936,22 @@ private:
     }};
 
     check_hashpower(hp, *cur_locks[0]);
-
     if (l[1] != l[0]) {
       cur_locks[1] = lock_and_rehash<normal_mode>(l[1]);
     }
     if (l[2] != l[1]) {
       cur_locks[2] = lock_and_rehash<normal_mode>(l[2]);
     }
-    return std::make_pair(TwoBuckets(&locks_[lock_ind(i1)], &locks_[lock_ind(i2)], i1, i2, normal_mode()),
-                          LockManager((lock_ind(i3) == lock_ind(i1) ||
-                                       lock_ind(i3) == lock_ind(i2))
+
+    for (uint8_t j = 0; j < 3; ++j) {
+      l[l2i[j]] = j;
+    }
+
+    return std::make_pair(TwoBuckets(cur_locks[l[0]], cur_locks[l[1]], i[0], i[1], normal_mode()),
+                          LockManager(cur_locks[l[2]] == cur_locks[l[0]] ||
+                                      cur_locks[l[2]] == cur_locks[l[1]]
                                           ? nullptr
-                                          : &locks_[lock_ind(i3)]));
+                                          : cur_locks[l[2]]));
   }
 
   // snapshot_and_lock_two loads locks the buckets associated with the given
@@ -1020,52 +1026,55 @@ private:
     cuckoo_status status;
   };
 
+  // should retry if returns seqlock::lock_bit
+  seqlock* read_and_rehash(seqlock_epoch_t& epoch, size_type l) const {
+    seqlock* lock = &locks_[l];
+    epoch = lock->get_epoch();
+
+    if (seqlock::is_locked(epoch)) {
+      return nullptr;
+    }
+    if (!seqlock::is_migrated(epoch)) {
+      epoch = lock->lock();
+      if (!seqlock::is_migrated(epoch)) {
+        migrate_lock(l);
+        lock->set_migrated(true);
+      }
+      lock->unlock();
+
+      return nullptr;
+    }
+
+    return lock;
+  }
+
   template <typename K>
   std::optional<mapped_type> read_value(const K &key) const {
     const hash_value hv = hashed_key(key);
 
     while (true) {
-      // Keep the current hashpower and locks we're using to compute the buckets
       const size_type hp = hashpower();
       const size_type i1 = index_hash(hp, hv.hash);
       const size_type i2 = alt_index(hp, hv.partial, i1);
+      const size_type l1 = lock_ind(i1);
+      const size_type l2 = lock_ind(i2);
 
-      size_type l1 = lock_ind(i1);
-      size_type l2 = lock_ind(i2);
+      seqlock_epoch_t epoch1;
+      seqlock* lock1 = read_and_rehash(epoch1, l1);
 
-      if (l1 > l2) {
-        std::swap(l1, l2);
+      if (lock1 == nullptr || hp != hashpower()) {
+        continue;
       }
-      seqlock& lock1 = locks_[l1];
-      seqlock& lock2 = locks_[l2];
 
-      if (!lock1.is_migrated()) {
-        lock1.lock();
-        if (!lock1.is_migrated()) {
-          migrate_lock(l1);
-          lock1.set_migrated(true);
+      seqlock_epoch_t epoch2;
+      seqlock* lock2;
+
+      if (l1 != l2) {
+        lock2 = read_and_rehash(epoch2, l2);
+
+        if (lock2 == nullptr) {
+          continue;
         }
-        lock1.unlock();
-      }
-      if (!lock2.is_migrated()) {
-        lock2.lock();
-        if (!lock2.is_migrated()) {
-          migrate_lock(l2);
-          lock2.set_migrated(true);
-        }
-        lock2.unlock();
-      }
-
-      const auto lock1_value = lock1.get_value();
-      if ((lock1_value & 1) != 0) {
-        continue;
-      }
-      const auto lock2_value = lock2.get_value();
-      if ((lock2_value & 1) != 0) {
-        continue;
-      }
-      if (hp != hashpower()) {
-        continue;
       }
 
       const table_position pos = cuckoo_find(key, hv.partial, i1, i2);
@@ -1075,10 +1084,15 @@ private:
         value_opt = pos.bucket_->mapped(pos.slot);
       }
 
+#ifdef __x86_64__
       asm volatile ("" ::: "memory");
+#elif defined(__aarch64__)
+      asm volatile ("DMB ISHLD" ::: "memory");
+#else
+      #error
+#endif
 
-      if (lock1_value == lock1.get_value() &&
-          lock2_value == lock2.get_value()) {
+      if (epoch1 == lock1->get_epoch() && (l1 == l2 || epoch2 == lock2->get_epoch())) {
         return value_opt;
       }
     }
@@ -1466,7 +1480,7 @@ private:
         // must be locked. We store tb inside the extrab container so it
         // is unlocked at the end of the loop.
         std::tie(twob, extra_manager) =
-            lock_three(hp, b.i1, b.i2, to.bucket, TABLE_MODE());
+            lock_three(hp, {{b.i1, b.i2, to.bucket}}, TABLE_MODE());
       } else {
         twob = lock_two(hp, from.bucket, to.bucket, TABLE_MODE());
       }
@@ -1710,7 +1724,7 @@ private:
         rehash_with_workers();
       }
     }
-
+    
     return ok;
   }
 
@@ -1862,12 +1876,7 @@ private:
   // the current locks array is smaller than the maximum size and also smaller
   // than the number of buckets in the upcoming buckets container. In this
   // case, we grow the locks array to the smaller of the maximum lock array
-  // size and the bucket count. This is done by allocating an entirely new lock
-  // container, taking all the locks, copying over the counters, and then
-  // finally adding it to the end of `all_locks_`, thereby designating it the
-  // "current" locks container. It is the responsibility of the caller to
-  // unlock all locks taken, including the new locks, whenever it is done with
-  // them, so that old threads can resume and potentially re-start.
+  // size and the bucket count.
   void maybe_resize_locks() {
     if (hashpower() >= kMaxNumLocksPow) {
       return;
@@ -2071,17 +2080,8 @@ private:
     return cuckoo_change_capacity<TABLE_MODE, manual_resize>(new_hp) == ok;
   }
 
-  // Miscellaneous functions
-
-  // reserve_calc takes in a parameter specifying a certain number of slots
-  // for a table and returns the smallest hashpower that will hold n elements.
   static size_type reserve_calc(const size_type n) {
-    const size_type buckets = (n + slot_per_bucket() - 1) / slot_per_bucket();
-    size_type blog2;
-    for (blog2 = 0; (size_type(1) << blog2) < buckets; ++blog2)
-      ;
-    assert(n <= buckets * slot_per_bucket() && buckets <= hashsize(blog2));
-    return blog2;
+    return reserve_calc_for_slots<SLOT_PER_BUCKET>(n);
   }
 
   // This class is a friend for unit testing
@@ -2733,4 +2733,4 @@ void swap(
   lhs.swap(rhs);
 }
 
-}  // namespace cuckoo_seqlock
+}  // namespace seqlock_lib::cuckoo

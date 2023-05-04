@@ -70,7 +70,7 @@ const size_t SLOT_PER_BUCKET = 4;
 
 template <class Alloc>
 using TestingContainer =
-    cuckoo_seqlock::bucket_container<std::shared_ptr<int>, int, Alloc, uint8_t,
+    seqlock_lib::cuckoo::cuckoo_bucket_container<std::shared_ptr<int>, int, Alloc, uint8_t,
                                SLOT_PER_BUCKET>;
 
 using value_type = std::pair<const std::shared_ptr<int>, int>;
@@ -297,7 +297,7 @@ private:
 bool ExceptionInt::do_throw = false;
 
 using ExceptionContainer =
-    cuckoo_seqlock::bucket_container<ExceptionInt, int,
+    seqlock_lib::cuckoo::cuckoo_bucket_container<ExceptionInt, int,
                                std::allocator<std::pair<ExceptionInt, int>>,
                                uint8_t, SLOT_PER_BUCKET>;
 

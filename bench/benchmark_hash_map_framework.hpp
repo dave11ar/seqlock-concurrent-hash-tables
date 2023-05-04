@@ -3,15 +3,14 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <iostream>
 #include <random>
 #include <string>
 #include <variant>
 #include <benchmark/benchmark.h>
 
-#include "../candidates_wrappers/cuckoo_seqlock_hash_map.hpp"
-#include "../candidates_wrappers/cuckoo_hash_map.hpp"
-#include "../candidates_wrappers/tbb_hash_map.hpp"
+#include "candidates_wrappers/seqlock_cuckoohash_map.hpp"
+#include "candidates_wrappers/cuckoohash_map.hpp"
+#include "candidates_wrappers/tbb_hash_map.hpp"
 
 namespace OperationsInfo {
   enum class Types {
@@ -303,7 +302,7 @@ static void abstract_uint32_uint32_benchmark(benchmark::State& state) {
             running_key_generator,
             [](){return 0;}));
 
-    char offset[128];
+    char offset[64];
     Map<uint32_t, uint32_t> map;
     execute_scenario(
         map,
@@ -352,9 +351,9 @@ inline std::vector<int64_t> get_uint32_benchmark_args(const Uint32Args& args) {
 }
 
 #define START_BENCHMARK(name, arguments_generator)\
-BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, cuckoo_seqlock_hash_map)\
+BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, seqlock_cuckoohash_map)\
     ->Name(name + "-cuckoo_seqlock")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->Iterations(5)->UseRealTime()->MeasureProcessCPUTime();\
-BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, cuckoo_hash_map)\
+BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, cuckoohash_map)\
     ->Name(name + "-cuckoo")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->Iterations(5)->UseRealTime()->MeasureProcessCPUTime();\
 // BENCHMARK_TEMPLATE(abstract_uint32_uint32_benchmark, tbb_hash_map)\
 //     ->Name(name + "-tbb")->Apply(arguments_generator)->Unit(benchmark::kMillisecond)->UseRealTime();\

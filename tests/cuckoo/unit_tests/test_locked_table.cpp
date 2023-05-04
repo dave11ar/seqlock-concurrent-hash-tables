@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <seqlock.hpp>
 #include "unit_test_util.hpp"
 
 TEST(LockedTable, Typedefs) {
@@ -408,7 +409,7 @@ TEST(LockedTable, Equality) {
 }
 
 template <typename Table> void check_all_locks_taken(Table &tbl) {
-  auto &locks = cuckoo_seqlock::UnitTestInternalAccess::get_locks(tbl);
+  auto &locks = seqlock_lib::cuckoo::UnitTestInternalAccess::get_locks(tbl);
   for (auto &lock : locks) {
     ASSERT_FALSE(lock.try_lock());
   }
