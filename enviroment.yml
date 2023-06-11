@@ -1,0 +1,12 @@
+name: seqlock_hash_map
+channels:
+  - conda-forge
+dependencies:
+  - make
+  - cmake >= 3.15
+  - compilers
+  - clang==14
+  - clangxx==14
+  - libhwloc
+  - gtest
+  - benchmark
